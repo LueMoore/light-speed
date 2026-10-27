@@ -242,11 +242,11 @@
   <div class="cbig"><span class="v" id="cval">1.00</span><span class="u">m/s</span></div>
   <div class="ctag" id="ctag">5 米外的画面，是 <b>5.0 秒</b>前发出的光</div>
 
-  <input type="range" id="cslide" min="0" max="1000" value="104" />
-  <div class="scalebar"><span>0.5</span><span>10</span><span>400 m/s</span></div>
+  <input type="range" id="cslide" min="0" max="1000" value="395" />
+  <div class="scalebar"><span>0.02</span><span>10</span><span>400 m/s</span></div>
 
   <div class="presets">
-    <button data-c="0.5">0.5</button>
+    <button data-c="0.05">0.05</button>
     <button data-c="1" class="on">1</button>
     <button data-c="5">5</button>
     <button data-c="1e8">∞</button>
@@ -713,7 +713,7 @@ void main(){
   // 仰角上限：正好 ±90°，可以完全垂直向下俯视
   const PITCH_LIMIT = Math.PI / 2;
 
-  const C_MIN = 0.5, C_MAX = 400.0;
+  const C_MIN = 0.02, C_MAX = 400.0;
 
   function sliderToC(v){ return C_MIN * Math.pow(C_MAX / C_MIN, v); }
   function cToSlider(c){ return Math.log(c / C_MIN) / Math.log(C_MAX / C_MIN); }
@@ -745,13 +745,15 @@ void main(){
     const sec = 5 / state.c;
     if(sec < 0.05){
       elCtag.innerHTML = "光几乎是瞬间到达的，这就是日常世界";
+    }else if(sec >= 60){
+      elCtag.innerHTML = "5 米外的画面，是 <b>" + (sec / 60).toFixed(1) + " 分钟</b>前发出的光";
     }else{
       const txt = sec >= 100 ? sec.toFixed(0) : sec.toFixed(1);
       elCtag.innerHTML = "5 米外的画面，是 <b>" + txt + " 秒</b>前发出的光";
     }
     presetBtns.forEach(function(b){
       const v = parseFloat(b.dataset.c);
-      b.classList.toggle("on", Math.abs(v - state.c) / Math.max(v, 1) < 0.02);
+      b.classList.toggle("on", Math.abs(v - state.c) / Math.max(v, 0.02) < 0.06);
     });
   }
 
@@ -1194,7 +1196,8 @@ void main(){
       const d = Math.hypot(p[0]-camPos[0], p[1]-camPos[1], p[2]-camPos[2]);
       return (now - tau) - d / c;
     }
-    const SPAN = 200, STEP = 0.2;
+    const SPAN = Math.min(5000, Math.max(200, 30 / c * 1.6));
+    const STEP = Math.max(0.2, SPAN / 700);
     let prev = now;
     for(let t = now - STEP; t >= now - SPAN; t -= STEP){
       if(g(t) > 0){
