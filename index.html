@@ -92,6 +92,14 @@
   .presets button:hover{background:#eceff5;border-color:#cfd7e3;}
   .presets button.on{background:#1a2130;border-color:#1a2130;color:#fff;}
 
+  /* ---- 物体运动速度 ---- */
+  .spdsec{margin-bottom:13px;}
+  .spdsec .ghead{margin-bottom:6px;}
+  .spdsec .ghead span:last-child{
+    color:#4a5468;font-weight:700;font-variant-numeric:tabular-nums;
+    letter-spacing:0;font-size:10.5px;
+  }
+
   .row{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:6px;}
   .row.three{grid-template-columns:1fr 1fr 1fr;}
   .row.one{grid-template-columns:1fr;}
@@ -244,6 +252,11 @@
     <button data-c="1e8">∞</button>
   </div>
 
+  <div class="spdsec">
+    <div class="ghead"><span>物体运动速度</span><span id="spdval">1.00×</span></div>
+    <input type="range" id="spd" min="0" max="1000" value="322" />
+  </div>
+
   <div class="row">
     <button id="bDelay">延迟着色</button>
     <button id="bPause">暂停</button>
@@ -309,6 +322,7 @@ uniform float uMode;        // 0 = 正常, 1 = 延迟着色
 uniform float uGhostCount;  // 用户手动添加的虚影数量
 uniform float uGhostC[NG];  // 每个虚影对应的光速值
 uniform float uBallVis[NS]; // 每个球体的显隐（1 = 可见）
+uniform float uBallSpeed;   // 物体运动速度倍率
 
 // 射线与静止球求交（解析解，虚影用这个，比步进快得多）
 float raySphere(vec3 ro, vec3 rd, vec3 ce, float ra){
@@ -325,9 +339,9 @@ float raySphere(vec3 ro, vec3 rd, vec3 ce, float ra){
 
 // 球 i 在 tau 时刻的位置
 #define BP(i,T) vec3( \
-  uOrbC[i].x + uOrbC[i].w * cos(uOrbP[i].x*(T) + uOrbP[i].y), \
-  uOrbC[i].y + uOrbP[i].w * sin(uOrbP[i].x*(T)*1.7 + uOrbP[i].y*1.3), \
-  uOrbC[i].z + uOrbC[i].w * sin(uOrbP[i].x*(T) + uOrbP[i].y) )
+  uOrbC[i].x + uOrbC[i].w * cos(uOrbP[i].x*(T)*uBallSpeed + uOrbP[i].y), \
+  uOrbC[i].y + uOrbP[i].w * sin(uOrbP[i].x*(T)*uBallSpeed*1.7 + uOrbP[i].y*1.3), \
+  uOrbC[i].z + uOrbC[i].w * sin(uOrbP[i].x*(T)*uBallSpeed + uOrbP[i].y) )
 
 vec3 lightPos(float tau){
   float a = uLightW * tau;
@@ -364,9 +378,11 @@ vec3 skyCol(vec3 rd){
 }
 
 float softShadow(vec3 P, vec3 L, float tHit, float maxDist){
+  // 球速越快，沿光线的 SDF 变化越剧烈，步长要相应收窄，否则会穿透
+  float lipK = clamp(1.0 + (uBallSpeed - 1.0) * 0.9, 0.6, 3.5);
   float res = 1.0;
   float s = 0.07;
-  for(int k = 0; k < 16; k++){
+  for(int k = 0; k < 18; k++){
     vec3 pp = P + L * s;
     float tau = tHit - s / uC;   // 光经过该点的时刻
     float d = 1e9;
@@ -375,9 +391,9 @@ float softShadow(vec3 P, vec3 L, float tHit, float maxDist){
       vec3 bp = BP(i, tau);
       d = min(d, length(pp - bp) - uOrbP[i].z);
     }
-    if(d < 0.002) return 0.0;
+    if(d < 0.006) return 0.0;
     res = min(res, 7.0 * d / s);
-    s += clamp(d, 0.06, 0.7);
+    s += clamp(d / lipK, 0.04, 0.7);
     if(s > maxDist) break;
   }
   return clamp(res, 0.0, 1.0);
@@ -435,20 +451,30 @@ void main(){
   vec3  bestCol = vec3(0.0);
   vec3  bestCtr = vec3(0.0);
 
+  // 球速越快，SDF 沿光线的 Lipschitz 常数越大（≈ 1 + v/c），
+  // 固定的 0.5 步长会直接跨过球体，造成表面空洞、法线错位
+  float lipK = clamp(1.0 + (uBallSpeed - 1.0) * 0.9, 0.6, 3.5);
+
   for(int i = 0; i < NS; i++){
     if(uBallVis[i] < 0.5) continue;
     float s = 0.03;
     bool hit = false;
-    for(int k = 0; k < 30; k++){
+    for(int k = 0; k < 36; k++){
       vec3 pp = ro + rd * s;
       float tau = t0 - s / uC;
       vec3 bp = BP(i, tau);
       float d = length(pp - bp) - uOrbP[i].z;
-      if(d < 0.0025){ hit = true; break; }
-      s += max(d * 0.50, 0.030);
+      if(d < 0.006){ hit = true; break; }
+      s += max(d * 0.50 / lipK, 0.015);
       if(s > bestS) break;
     }
     if(hit && s < bestS){
+      // 用解析解校正步进结果：球体高速运动时步进值会有残差，
+      // 不修正的话法线会抖，表面出现脏斑
+      vec3 c0 = BP(i, t0 - s / uC);
+      float s2 = raySphere(ro, rd, c0, uOrbP[i].z);
+      if(s2 > 0.0 && s2 < bestS) s = s2;
+
       bestS = s;
       bestI = i;
       bestCol = uOrbCol[i];
@@ -516,6 +542,9 @@ void main(){
 
         float tk = t0 - dNow / ck;
         vec3 gp = BP(i, tk);
+        tk = t0 - length(gp - ro) / ck;   // 再迭代一次，球速快时位置更准
+        gp = BP(i, tk);
+
         float gs = raySphere(ro, rd, gp, uOrbP[i].z);
         if(gs > 0.0 && gs < bestS){
           vec3 gn = normalize(ro + rd * gs - gp);
@@ -565,11 +594,11 @@ void main(){
   // 与着色器完全一致的球体位置函数
   function ballPos(i, tau){
     const s = SPHERES[i];
-    const a = s.w * tau + s.ph;
+    const a = s.w * state.ballSpeed * tau;
     return [
-      s.cx + s.R * Math.cos(a),
+      s.cx + s.R * Math.cos(a + s.ph),
       s.cy + s.bob * Math.sin(a * 1.7 + s.ph * 1.3),
-      s.cz + s.R * Math.sin(a)
+      s.cz + s.R * Math.sin(a + s.ph)
     ];
   }
 
@@ -630,7 +659,7 @@ void main(){
 
   const U = {};
   ["uRes","uTime","uC","uCamPos","uCamFwd","uCamRight","uCamUp","uTanHalf",
-   "uLightC","uLightR","uLightW","uLightH","uMode","uGhostCount"].forEach(function(n){
+   "uLightC","uLightR","uLightW","uLightH","uMode","uGhostCount","uBallSpeed"].forEach(function(n){
     U[n] = gl.getUniformLocation(prog, n);
   });
   U.uOrbC   = gl.getUniformLocation(prog, "uOrbC[0]");
@@ -662,6 +691,7 @@ void main(){
     delayMode: false,
     ghosts: [],          // 用户手动标记的光速值
     ballVis: [true, true, true, true, true, true],
+    ballSpeed: 1.0,      // 物体运动速度倍率
     c: 1.0,
     scale: 0.8
   };
@@ -735,6 +765,16 @@ void main(){
 
   elSlide.addEventListener("input", function(){
     setC(sliderToC(elSlide.value / 1000), false);
+  });
+
+  // ---- 物体运动速度 ----
+  const elSpd = document.getElementById("spd");
+  const elSpdVal = document.getElementById("spdval");
+  const SPD_MIN = 0.05, SPD_MAX = 3.0;
+
+  elSpd.addEventListener("input", function(){
+    state.ballSpeed = SPD_MIN + (elSpd.value / 1000) * (SPD_MAX - SPD_MIN);
+    elSpdVal.textContent = state.ballSpeed.toFixed(2) + "×";
   });
 
   presetBtns.forEach(function(b){
@@ -1104,6 +1144,7 @@ void main(){
     }
     for(let i = 0; i < 6; i++) visBuf[i] = state.ballVis[i] ? 1 : 0;
     gl.uniform1fv(U.uBallVis, visBuf);
+    gl.uniform1f(U.uBallSpeed, state.ballSpeed);
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
